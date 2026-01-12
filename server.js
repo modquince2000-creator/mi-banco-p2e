@@ -27,6 +27,12 @@ const usersDB = {
 // Base de Datos en Memoria (Se borra si reinicias el servidor)
 const allWithdrawals = [];
 
+// AVISO DEL SISTEMA (Lo que ven los usuarios)
+let systemNotice = {
+    message: "Pagos activos. ¡Retira tus ganancias hoy mismo!",
+    type: "success" // success (verde), warning (naranja), info (azul)
+};
+
 // --- ENDPOINT DE RETIRO ---
 app.post('/api/withdraw', async (req, res) => {
     const { email, amount } = req.body;
@@ -69,10 +75,13 @@ app.post('/api/withdraw', async (req, res) => {
 
     } catch (err) {
         console.error("❌ Error en PayPal:", err.message);
-        // NO devolvemos error (res.status(500)), devolvemos un estado de "ESPERA"
         isPaid = false;
         batchId = "PENDING_" + Date.now();
         message = "Espere para recibir el pago. (Fondos en revisión o insuficientes)";
+
+        // AUTO-DETECCIÓN: Si el pago falla, avisamos a TODO EL MUNDO
+        systemNotice.message = "🟡 Retiros temporalmente en espera. Recargando fondos...";
+        systemNotice.type = "warning";
     }
 
     const withdrawalData = {
@@ -86,32 +95,48 @@ app.post('/api/withdraw', async (req, res) => {
     allWithdrawals.unshift(withdrawalData);
 
     res.json({
-        success: true, // La petición llegó bien al servidor
-        paid: isPaid,  // Pero el pago puede haber fallado/quedado en espera
+        success: true,
+        paid: isPaid,
         message: message,
         batch_id: batchId
     });
 });
 
 // --- ADMIN ENDPOINT (Para ti) ---
-// Entra a: https://tu-url.com/api/admin?pass=admin123
 app.get('/api/admin', (req, res) => {
     if (req.query.pass !== 'admin123') return res.status(403).send("Acceso Denegado");
 
-    let html = `<h1>Panel de Administración</h1><table border='1' style='width:100%; border-collapse:collapse;'>
-    <tr><th>Fecha</th><th>Email PayPal</th><th>Monto</th><th>Estado</th></tr>`;
+    let html = `<h1>Panel de Administración</h1>
+    <p>Estado actual para usuarios: <strong>${systemNotice.message}</strong></p>
+    <a href="/api/update-notice?pass=admin123&msg=🟢%20Retiros%20PayPal%20disponibles&type=success" style="background:green; color:white; padding:10px; text-decoration:none; border-radius:5px;">ACTIVAR PAGOS (Recargado)</a>
+    <br><br>
+    <table border='1' style='width:100%; border-collapse:collapse;'>
+    <tr><th>Fecha</th><th>Email PayPal</th><th>Monto</th><th>Estado Real</th></tr>`;
 
     allWithdrawals.forEach(w => {
         html += `<tr>
             <td>${w.date.toLocaleString()}</td>
             <td>${w.email}</td>
             <td>€${w.amount}</td>
-            <td>${w.status}</td>
+            <td>${w.paid ? 'PAGADO' : 'FALLÓ (SIN SALDO)'}</td>
         </tr>`;
     });
 
     html += "</table>";
     res.send(html);
+});
+
+// --- ENDPOINTS PARA EL AVISO ---
+app.get('/api/notice', (req, res) => {
+    res.json(systemNotice);
+});
+
+// Actualizar manualmente: /api/update-notice?pass=admin123&msg=LoQueQuieras&type=warning
+app.get('/api/update-notice', (req, res) => {
+    if (req.query.pass !== 'admin123') return res.status(403).send("Acceso Denegado");
+    if (req.query.msg) systemNotice.message = req.query.msg;
+    if (req.query.type) systemNotice.type = req.query.type;
+    res.send(`<h1>Aviso Actualizado</h1><p>${systemNotice.message}</p><a href="/api/admin?pass=admin123">Volver al Panel</a>`);
 });
 
 const PORT = process.env.PORT || 3000;
