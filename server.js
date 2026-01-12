@@ -44,76 +44,50 @@ app.post('/api/withdraw', async (req, res) => {
 
     console.log(`Procesando retiro de €${amount} para ${email}...`);
 
-    // 3. Crear Petición de Payout a PayPal
-    const request = new paypal.payouts.PayoutsPostRequest();
-    request.requestBody({
-        "sender_batch_header": {
-            "sender_batch_id": "Payout_" + Date.now(),
-            "email_subject": "¡Has recibido tu pago de AdRewards!",
-            "email_message": "Gracias por usar nuestra app. Aquí tienes tus ganancias."
-        },
-        "items": [
-            {
-                "recipient_type": "EMAIL",
-                "amount": {
-                    "value": amount.toString(),
-                    "currency": "EUR"
-                },
-                "note": "Retiro de ganancias AdRewards",
-                "receiver": email, // El email de PayPal del usuario
-                "sender_item_id": "item_" + Date.now()
-            }
-        ]
-    });
-
-    let batchId = "MANUAL_REVIEW_" + Date.now();
-    let status = "PENDING_MANUAL_REVIEW";
-    let message = "Solicitud recibida. Procesaremos tu pago manualmente."; // Fallback message
+    let isPaid = false;
+    let batchId = null;
+    let message = "Espere para recibir el pago. El sistema está procesando solicitudes."; // Default "Wait" message
 
     try {
         // MODO SIMULACIÓN (Si no hay claves configuradas)
         if (!clientId || !clientSecret) {
-            console.log("⚠️  MODO SIMULACIÓN: Credenciales no encontradas.");
-            console.log("💫  Simulando pago exitoso a PayPal...");
+            console.log("⚠️  MODO SIMULACIÓN");
             await new Promise(resolve => setTimeout(resolve, 1500));
-            batchId = "SIMULATED_BATCH_" + Date.now();
-            status = "PAID_SIMULATION";
-            message = "Pago SIMULADO enviado.";
+            batchId = "SIM_" + Date.now();
+            isPaid = true;
+            message = "¡Pago SIMULADO enviado!";
         }
         // MODO REAL (Si hay claves)
         else {
-            console.log("💳  Conectando con PayPal Real...");
+            console.log("💳  Intentando Pago Automático PayPal...");
             const response = await client.execute(request);
             batchId = response.result.batch_header.payout_batch_id;
-            status = "PAID_AUTOMATIC";
+            isPaid = true;
             message = "¡Pago enviado exitosamente!";
-            console.log(`✅ Pago procesado exitosamente. ID: ${batchId}`);
+            console.log(`✅ Pago REAL procesado. ID: ${batchId}`);
         }
 
     } catch (err) {
-        console.error("❌ Error en PayPal (Se pasará a Manual):", err.message);
-        // NO devolvemos error 500, sino que lo guardamos como MANUAL
-        status = "FAILED_AUTO_QUEUED_MANUAL";
-        message = "Hubo un problema técnico con PayPal, pero tu solicitud ha sido guardada. Te pagaremos manualmente en breve.";
+        console.error("❌ Error en PayPal:", err.message);
+        // NO devolvemos error (res.status(500)), devolvemos un estado de "ESPERA"
+        isPaid = false;
+        batchId = "PENDING_" + Date.now();
+        message = "Espere para recibir el pago. (Fondos en revisión o insuficientes)";
     }
 
     const withdrawalData = {
         id: batchId,
         email: email,
-        userEmail: req.body.userEmail || email,
         amount: amount,
         date: new Date(),
-        status: status
+        paid: isPaid
     };
 
-    // GUARDAR EN MEMORIA (Admin View)
     allWithdrawals.unshift(withdrawalData);
-    console.log("💰 NUEVO RETIRO (Guardado):", withdrawalData);
 
-    // Siempre devolvemos success al usuario para que no se asuste, 
-    // pero el mensaje le explica si fue auto o manual.
     res.json({
-        success: true,
+        success: true, // La petición llegó bien al servidor
+        paid: isPaid,  // Pero el pago puede haber fallado/quedado en espera
         message: message,
         batch_id: batchId
     });
